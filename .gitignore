@@ -1,0 +1,6 @@
+.env
+node_modules/
+chroma_data/
+trash/
+.DS_Store
+inspect_output.txt

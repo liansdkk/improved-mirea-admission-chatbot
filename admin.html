@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Админ-панель — база знаний</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 30px; }
+  #loginBox, #panelBox { margin-top: 20px; }
+  #panelBox { display: none; }
+  input[type=password], input[type=file] { padding: 8px; margin-right: 8px; }
+  button { padding: 8px 16px; cursor: pointer; }
+  ul { list-style: none; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+  .docInfo { display: flex; flex-direction: column; }
+  .docDate { font-size: 12px; color: #888; margin-top: 2px; }
+  .delBtn { background: #e33; color: white; border: none; border-radius: 4px; padding: 6px 12px; }
+  .restoreBtn { background: #2a7; color: white; border: none; border-radius: 4px; padding: 6px 12px; }
+  #status { margin-top: 10px; color: #666; }
+  #uploadBox { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+  #trashBox { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+  .emptyMsg { color: #999; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>Управление базой знаний</h1>
+
+<div id="loginBox">
+  <input type="password" id="passwordInput" placeholder="Пароль администратора">
+  <button onclick="login()">Войти</button>
+</div>
+
+<div id="panelBox">
+  <h2>Документы в базе (<span id="docCount">0</span>)</h2>
+  <ul id="docList"></ul>
+
+  <div id="uploadBox">
+    <h2>Добавить документ</h2>
+    <input type="file" id="fileInput" accept=".pdf,.txt">
+    <button onclick="uploadFile()">Загрузить</button>
+  </div>
+
+  <div id="trashBox">
+    <h2>Корзина (<span id="trashCount">0</span>)</h2>
+    <ul id="trashList"></ul>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script>
+let adminPassword = '';
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function login() {
+  adminPassword = document.getElementById('passwordInput').value;
+  const res = await fetch('/api/admin/documents', {
+    headers: { 'x-admin-password': adminPassword }
+  });
+  if (!res.ok) {
+    alert('Неверный пароль');
+    return;
+  }
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('panelBox').style.display = 'block';
+  loadDocuments();
+  loadTrash();
+}
+
+async function loadDocuments() {
+  const res = await fetch('/api/admin/documents', {
+    headers: { 'x-admin-password': adminPassword }
+  });
+  const data = await res.json();
+  const list = document.getElementById('docList');
+  list.innerHTML = '';
+  document.getElementById('docCount').textContent = data.documents.length;
+
+  if (data.documents.length === 0) {
+    list.innerHTML = '<li class="emptyMsg">Документов пока нет</li>';
+    return;
+  }
+
+  for (const doc of data.documents) {
+    const li = document.createElement('li');
+
+    const info = document.createElement('div');
+    info.className = 'docInfo';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = doc.name;
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'docDate';
+    dateSpan.textContent = 'Обновлён: ' + formatDate(doc.date);
+    info.appendChild(nameSpan);
+    info.appendChild(dateSpan);
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Удалить';
+    delBtn.className = 'delBtn';
+    delBtn.onclick = () => deleteDocument(doc.name);
+
+    li.appendChild(info);
+    li.appendChild(delBtn);
+    list.appendChild(li);
+  }
+}
+
+async function loadTrash() {
+  const res = await fetch('/api/admin/trash', {
+    headers: { 'x-admin-password': adminPassword }
+  });
+  const data = await res.json();
+  const list = document.getElementById('trashList');
+  list.innerHTML = '';
+  document.getElementById('trashCount').textContent = data.trash.length;
+
+  if (data.trash.length === 0) {
+    list.innerHTML = '<li class="emptyMsg">Корзина пуста</li>';
+    return;
+  }
+
+  for (const item of data.trash) {
+    const li = document.createElement('li');
+
+    const info = document.createElement('div');
+    info.className = 'docInfo';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = item.originalName;
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'docDate';
+    dateSpan.textContent = 'Удалён: ' + formatDate(item.date);
+    info.appendChild(nameSpan);
+    info.appendChild(dateSpan);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Восстановить';
+    restoreBtn.className = 'restoreBtn';
+    restoreBtn.onclick = () => restoreDocument(item.trashName);
+
+    li.appendChild(info);
+    li.appendChild(restoreBtn);
+    list.appendChild(li);
+  }
+}
+
+async function deleteDocument(filename) {
+  if (!confirm(`Удалить документ "${filename}" из базы знаний? (можно будет восстановить из корзины)`)) return;
+
+  setStatus('Удаление...');
+  const res = await fetch(`/api/admin/documents/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+    headers: { 'x-admin-password': adminPassword }
+  });
+  const data = await res.json();
+  if (data.success) {
+    setStatus(`Документ "${filename}" перемещён в корзину`);
+    loadDocuments();
+    loadTrash();
+  } else {
+    setStatus('Ошибка: ' + data.error);
+  }
+}
+
+async function restoreDocument(trashName) {
+  setStatus('Восстановление и повторная индексация, это может занять время...');
+  const res = await fetch(`/api/admin/trash/${encodeURIComponent(trashName)}/restore`, {
+    method: 'POST',
+    headers: { 'x-admin-password': adminPassword }
+  });
+  const data = await res.json();
+  if (data.success) {
+    setStatus(`Документ "${data.originalName}" восстановлен, ${data.chunksCount} фрагментов проиндексировано`);
+    loadDocuments();
+    loadTrash();
+  } else {
+    setStatus('Ошибка: ' + data.error);
+  }
+}
+
+async function uploadFile() {
+  const fileInput = document.getElementById('fileInput');
+  const file = fileInput.files[0];
+  if (!file) {
+    alert('Выберите файл');
+    return;
+  }
+
+  setStatus('Загрузка и обработка документа, это может занять время...');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch('/api/admin/upload', {
+    method: 'POST',
+    headers: { 'x-admin-password': adminPassword },
+    body: formData
+  });
+  const data = await res.json();
+
+  if (data.success) {
+    setStatus(`Документ "${data.filename}" добавлен, ${data.chunksCount} фрагментов проиндексировано`);
+    fileInput.value = '';
+    loadDocuments();
+  } else {
+    setStatus('Ошибка: ' + data.error);
+  }
+}
+
+function setStatus(text) {
+  document.getElementById('status').textContent = text;
+}
+</script>
+
+</body>
+</html>
